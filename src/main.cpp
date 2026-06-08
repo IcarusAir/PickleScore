@@ -4,7 +4,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
+#include "freertos/timers.h"
+#include "freertos/event_groups.h"
 
 #include <Adafruit_GFX.h>
 // Switch Comments to toggle emulator
@@ -24,6 +25,10 @@
 #define BUTTON1_PIN 0
 #define BUTTON2_PIN 1
 #define BUTTON3_PIN 10
+
+#define BUTTON1_BIT (1 << 0)
+#define BUTTON2_BIT (1 << 1)
+#define BUTTON3_BIT (1 << 2)
 
 #define DEBUG_MODE false
 
@@ -48,6 +53,8 @@ bool team2_score_f = false;
 
 int team1_score = 0;
 int team2_score = 0;
+
+EventGroupHandle_t global_event_group_handler;
 
 // ============================= FUNCTION DEFINITIONS ====================================
 void displayInit();
@@ -109,30 +116,69 @@ void isrSetup()
 
 void button_pin0_isr(void* arg) 
 {
-    if (!team2_score_f)
-        team1_score_f = true;
-    return;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    BaseType_t result;
+    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON1_BIT, &xHigherPriorityTaskWoken);
+    if (result != pdFAIL)
+    {
+        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+    }
 }
 
 void button_pin1_isr(void* arg) 
 {
-    if (!team1_score_f)
-        team2_score_f = true;
-    return;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    BaseType_t result;
+    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON2_BIT, &xHigherPriorityTaskWoken);
+    if (result != pdFAIL)
+    {
+        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+    }
 }
 
 void button_pin10_isr(void* arg) 
 {
-    return;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    BaseType_t result;
+    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON3_BIT, &xHigherPriorityTaskWoken);
+    if (result != pdFAIL)
+    {
+        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+    }
 }
 
 
 // =============================== RTOS Task Functions =============================================
 
-void button1_response(void *args) 
+void button_listener_task(void* pvParameters) 
 {
+    EventGroupHandle_t event_handler = (EventGroupHandle_t)pvParameters;
+    EventBits_t bits;
 
-
+    while(1) 
+    {
+        bits = xEventGroupWaitBits(event_handler,
+            BUTTON1_BIT | BUTTON2_BIT | BUTTON3_BIT,
+            pdTRUE,
+            pdFALSE,
+            portMAX_DELAY);
+        
+        if ((bits & BUTTON1_BIT) == BUTTON1_BIT) 
+        {
+            system_state = p_team1_right;
+            incrementScore();
+        }
+        if ((bits & BUTTON2_BIT) == BUTTON2_BIT) 
+        {
+            system_state = p_team2_right;
+            incrementScore();
+        }
+        if ((bits & BUTTON3_BIT) == BUTTON3_BIT) 
+        {
+            // Nothing yet
+        }
+        
+    }
 
 }
 
@@ -338,35 +384,29 @@ void setup()
     display.clearDisplay();
     displayInit();
 
-    // RTOS Task
+    // RTOS Task Setup
+    global_event_group_handler = xEventGroupCreate();
+
+    status = xTaskCreate(button_listener_task, "Button Listener Task", 2048, (void*) global_event_group_handler, 3, NULL);
+    if (status != pdPASS)
+    {
+        Serial.println("Task Creation Failed!");
+        while(1);
+    }
+    //vTaskStartScheduler();
+    //REMOVED, The ESP-IDF handles this internally, ESP has it's own version of FreeRTOS that uses all the same functionality
+    //  but operates slightly differently: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/freertos.html
+
 }
 
 void loop() 
 {
     // Debug Mode Check
-    if (DEBUG_MODE){printDebug();} 
-    else {
-        // Pseudocode time
-        // We are in the main run, assume all setup is done and we are waiting for button presses, score is 0-0-2
-        if (team1_score_f) {
-            team1_score_f = false;
-            system_state = p_team1_right;
-            incrementScore();
-        } else if (team2_score_f) {
-            team2_score_f = false;
-            system_state = p_team2_right;
-            incrementScore();
-        }
+    if (DEBUG_MODE){printDebug();}
 
-        if (team1_score >= 21)
-            team1_score = 0;
-        if (team2_score >= 21)
-            team2_score = 0;
-        display.display();
-        delay(500);
-        
-        // TODO Use FreeRTOS to have ISRs generate semaphores to modify team scores, rather than having a main loop
-        // Clear Loop
-    }
+    // Re-update display every half-second
+    // display.display();
+
+    // delay(500);
 }
 
