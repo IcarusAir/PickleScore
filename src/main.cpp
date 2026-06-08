@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <Wire.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
 #include <Adafruit_GFX.h>
 // Switch Comments to toggle emulator
 //#include <Adafruit_SSD1306.h>
@@ -23,12 +27,7 @@
 
 #define DEBUG_MODE false
 
-// Variable declarations
-int result;
-
-int b1_val;
-int b2_val;
-int b3_val;
+// ============================= GLOBAL DEFINITIONS ====================================
 
 // Adafruit Display variables - Switch Comments to toggle emulator
 //Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
@@ -50,8 +49,7 @@ bool team2_score_f = false;
 int team1_score = 0;
 int team2_score = 0;
 
-
-// put function declarations here:
+// ============================= FUNCTION DEFINITIONS ====================================
 void displayInit();
 void displayInvertCourtSelect();
 void displayInvertCourtDeselect();
@@ -67,7 +65,8 @@ void button_pin10_isr(void* arg);
 
 // =============================== SETUP Functions =====================================
 
-void gpioSetup() {
+void gpioSetup() 
+{
     // Initialize Button Pins
     gpio_pad_select_gpio(GPIO_NUM_0);
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
@@ -88,7 +87,8 @@ void gpioSetup() {
     gpio_set_intr_type(GPIO_NUM_10, GPIO_INTR_POSEDGE);
 }
 
-void isrSetup() {
+void isrSetup() 
+{
     // Set up interrupts
     // if(gpio_intr_enable(GPIO_NUM_0) != ESP_OK){Serial.printf("Issue Setting up Interrupt for pin 0");}
     // if(gpio_intr_enable(GPIO_NUM_1) != ESP_OK){Serial.printf("Issue Setting up Interrupt for pin 1");}
@@ -103,76 +103,45 @@ void isrSetup() {
 
 }
 
-void setup() {
-    // Initialize Serial
-    Serial.begin(9600);
-    delay(500);
-    
-    gpioSetup();
-    isrSetup();
 
-    // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-    if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
-        Serial.println(F("SSD1306 allocation failed"));
-        for(;;); // Don't proceed, loop forever
-    }
-
-    display.clearDisplay();
-    displayInit();
-}
 
 // =============================== Interrupt Service Routines ===========================
 
-void button_pin0_isr(void* arg) {
+void button_pin0_isr(void* arg) 
+{
     if (!team2_score_f)
         team1_score_f = true;
     return;
 }
 
-void button_pin1_isr(void* arg) {
+void button_pin1_isr(void* arg) 
+{
     if (!team1_score_f)
         team2_score_f = true;
     return;
 }
 
-void button_pin10_isr(void* arg) {
+void button_pin10_isr(void* arg) 
+{
     return;
 }
 
 
-// =============================== Main Loop =======================================
-void loop() {
+// =============================== RTOS Task Functions =============================================
 
-    // Debug Mode Check
-    if (DEBUG_MODE){printDebug();} 
-    else {
-        // Pseudocode time
-        // We are in the main run, assume all setup is done and we are waiting for button presses, score is 0-0-2
-        if (team1_score_f) {
-            team1_score_f = false;
-            system_state = p_team1_right;
-            incrementScore();
-        } else if (team2_score_f) {
-            team2_score_f = false;
-            system_state = p_team2_right;
-            incrementScore();
-        }
+void button1_response(void *args) 
+{
 
-        if (team1_score >= 21)
-            team1_score = 0;
-        if (team2_score >= 21)
-            team2_score = 0;
-        display.display();
-        delay(500);
-        
-        // TODO Use FreeRTOS to have ISRs generate semaphores to modify team scores, rather than having a main loop
-        // Clear Loop
-    }
+
+
 }
 
-// Show boot up screen
-void displayInit() {
 
+// =============================== Helper Functions ================================================
+
+// Show boot up screen
+void displayInit() 
+{
     // Draw Court Diagram
     display.drawRect(25, 5, 30, 16, SSD1306_WHITE);
     display.drawRect(25, 20, 30, 16, SSD1306_WHITE);
@@ -212,8 +181,8 @@ void displayInit() {
 
 }
 
-void displayInvertCourtSelect() {
-    
+void displayInvertCourtSelect() 
+{
     if (system_state == p_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_WHITE);
@@ -233,8 +202,8 @@ void displayInvertCourtSelect() {
     display.display();
 }
 
-void displayInvertCourtDeselect() {
-
+void displayInvertCourtDeselect() 
+{
     if (system_state == p_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_BLACK);
@@ -287,7 +256,8 @@ void displayInvertCourtDeselect() {
     display.display();
 }
 
-void incrementScore() {
+void incrementScore() 
+{
     // Increase the score of the serving team
     char tens;
     char ones;
@@ -326,14 +296,16 @@ void incrementScore() {
     return;
 }
 
-void setScore(int s) {
+void setScore(int s) 
+{
     // Set the score of the serving team to a certain number
 
 
     return;
 }
 
-void printDebug() {
+void printDebug() 
+{
     // If DEBUG mode is on, display button inputs
     Serial.println("\n============================================");
     Serial.println("              D E B U G");
@@ -343,3 +315,58 @@ void printDebug() {
     Serial.println("============================================");
 
 }
+
+// =============================== Main Application and Loop =======================================
+
+void setup() 
+{
+    // Initialize Serial
+    Serial.begin(9600);
+    delay(500);
+
+    BaseType_t status;
+    
+    gpioSetup();
+    isrSetup();
+
+    // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+    if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
+        Serial.println(F("SSD1306 allocation failed"));
+        for(;;); // Don't proceed, loop forever
+    }
+
+    display.clearDisplay();
+    displayInit();
+
+    // RTOS Task
+}
+
+void loop() 
+{
+    // Debug Mode Check
+    if (DEBUG_MODE){printDebug();} 
+    else {
+        // Pseudocode time
+        // We are in the main run, assume all setup is done and we are waiting for button presses, score is 0-0-2
+        if (team1_score_f) {
+            team1_score_f = false;
+            system_state = p_team1_right;
+            incrementScore();
+        } else if (team2_score_f) {
+            team2_score_f = false;
+            system_state = p_team2_right;
+            incrementScore();
+        }
+
+        if (team1_score >= 21)
+            team1_score = 0;
+        if (team2_score >= 21)
+            team2_score = 0;
+        display.display();
+        delay(500);
+        
+        // TODO Use FreeRTOS to have ISRs generate semaphores to modify team scores, rather than having a main loop
+        // Clear Loop
+    }
+}
+
