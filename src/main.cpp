@@ -4,8 +4,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/timers.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include <Adafruit_GFX.h>
 // Switch Comments to toggle emulator
@@ -39,17 +39,27 @@
 Adafruit_SSD1306_EMULATOR display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 
 enum state {
-    startup = 0,
-    p_team1_right = 1,
-    p_team1_left = 2,
-    p_team2_right = 3,
-    p_team2_left = 4
+    startup,
+    /* Pickleball Doubles*/
+    pd_team1_right,
+    pd_team1_left,
+    pd_team2_right,
+    pd_team2_left,
+    pd_between_games,
+    pd_end_of_games,
+    /* Badminton Singles*/
+    bs_team1,
+    bs_team2,
+    bs_between_games,
+    bs_end_of_games
 };
 
 enum state system_state = startup;
 
-bool team1_score_f = false;
-bool team2_score_f = false;
+// An 8-bit set of flags showing which courts are highlighted and current scoring flags
+// Bits 7:4 - court light data (UL - 7, LL - 6, UR - 5, LR - 4)
+// Bits 1:0 - Scoring flags (team 1 - 1, team 2 - 0)
+uint8_t court_data = 0x0;
 
 int team1_score = 0;
 int team2_score = 0;
@@ -96,11 +106,6 @@ void gpioSetup()
 
 void isrSetup() 
 {
-    // Set up interrupts
-    // if(gpio_intr_enable(GPIO_NUM_0) != ESP_OK){Serial.printf("Issue Setting up Interrupt for pin 0");}
-    // if(gpio_intr_enable(GPIO_NUM_1) != ESP_OK){Serial.printf("Issue Setting up Interrupt for pin 1");}
-    // if(gpio_intr_enable(GPIO_NUM_10) != ESP_OK){Serial.printf("Issue Setting up Interrupt for pin 10");}
-
     // Route ISRs
     if(gpio_install_isr_service(0 /* No Flags */) != ESP_OK){Serial.println("Issue Installing ISR Service");}
 
@@ -111,11 +116,12 @@ void isrSetup()
 }
 
 
-
 // =============================== Interrupt Service Routines ===========================
 
+// ISR for GPIO Pin 0 - connected to button that scores for team 1
 void button_pin0_isr(void* arg) 
 {
+    // TODO look into debouncing buttons with an RC filter or if there is an internal ISR option to do so.
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
     result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON1_BIT, &xHigherPriorityTaskWoken);
@@ -150,7 +156,10 @@ void button_pin10_isr(void* arg)
 
 // =============================== RTOS Task Functions =============================================
 
-void button_listener_task(void* pvParameters) 
+
+// The job of the score update task is to listen for a button to be pressed and update the score based on the logic of a classic
+// Pickleball game scoring system; This also involves updating the current server
+void score_update_task(void* pvParameters) 
 {
     EventGroupHandle_t event_handler = (EventGroupHandle_t)pvParameters;
     EventBits_t bits;
@@ -165,12 +174,12 @@ void button_listener_task(void* pvParameters)
         
         if ((bits & BUTTON1_BIT) == BUTTON1_BIT) 
         {
-            system_state = p_team1_right;
+            system_state = pd_team1_right;
             incrementScore();
         }
         if ((bits & BUTTON2_BIT) == BUTTON2_BIT) 
         {
-            system_state = p_team2_right;
+            system_state = pd_team2_right;
             incrementScore();
         }
         if ((bits & BUTTON3_BIT) == BUTTON3_BIT) 
@@ -179,6 +188,28 @@ void button_listener_task(void* pvParameters)
         }
         
     }
+
+}
+
+void highlight_court_task(TimerHandle_t timer)
+{
+    // Only blink the court light when waiting for service
+    if (system_state == pd_team1_left || system_state == pd_team1_right || system_state == pd_team2_left ||  system_state == pd_team2_left) 
+    {
+        if ( (int) pvTimerGetTimerID(timer) == 0) 
+        {
+            displayInvertCourtSelect();
+        } 
+        else if ( (int) pvTimerGetTimerID(timer) == 1) 
+        {
+            displayInvertCourtDeselect();
+        }
+        
+    }
+}
+
+void end_game_task(void* pvParameters) 
+{
 
 }
 
@@ -229,16 +260,16 @@ void displayInit()
 
 void displayInvertCourtSelect() 
 {
-    if (system_state == p_team1_right) {
+    if (system_state == pd_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_WHITE);
-    } else if (system_state == p_team1_left) {
+    } else if (system_state == pd_team1_left) {
         display.fillRect(25, 5, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 4, 32, 18, SSD1306_WHITE);
-    } else if (system_state == p_team2_right) {
+    } else if (system_state == pd_team2_right) {
         display.fillRect(73, 5, 30, 16, SSD1306_INVERSE);
         display.drawRect(72, 4, 32, 18, SSD1306_WHITE);
-    } else if (system_state == p_team2_left) {
+    } else if (system_state == pd_team2_left) {
         display.fillRect(73, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(72, 19, 32, 18, SSD1306_WHITE);
     } else {
@@ -250,7 +281,7 @@ void displayInvertCourtSelect()
 
 void displayInvertCourtDeselect() 
 {
-    if (system_state == p_team1_right) {
+    if (system_state == pd_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_BLACK);
 
@@ -261,7 +292,7 @@ void displayInvertCourtDeselect()
         display.drawPixel(50,19,SSD1306_WHITE);
         display.drawPixel(52,19,SSD1306_WHITE);
 
-    } else if (system_state == p_team1_left) {
+    } else if (system_state == pd_team1_left) {
         display.fillRect(25, 5, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 4, 32, 18, SSD1306_BLACK);
 
@@ -276,7 +307,7 @@ void displayInvertCourtDeselect()
         display.drawPixel(55,16,SSD1306_WHITE);
         display.drawPixel(55,18,SSD1306_WHITE);
 
-    } else if (system_state == p_team2_right) {
+    } else if (system_state == pd_team2_right) {
         display.fillRect(73, 5, 30, 16, SSD1306_INVERSE);
         display.drawRect(72, 4, 32, 18, SSD1306_BLACK);
 
@@ -286,7 +317,7 @@ void displayInvertCourtDeselect()
         display.drawPixel(102,21,SSD1306_WHITE);
         display.drawPixel(100,21,SSD1306_WHITE);
 
-    } else if (system_state == p_team2_left) {
+    } else if (system_state == pd_team2_left) {
         display.fillRect(73, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(72, 19, 32, 18, SSD1306_BLACK);
 
@@ -308,7 +339,7 @@ void incrementScore()
     char tens;
     char ones;
 
-    if (system_state == p_team1_left || system_state == p_team1_right) {
+    if (system_state == pd_team1_left || system_state == pd_team1_right) {
         if (team1_score < 21) {
             team1_score++;
             // Clear old score
@@ -321,7 +352,7 @@ void incrementScore()
             display.write(tens);
             display.write(ones);
         }
-    } else if (system_state == p_team2_left || system_state == p_team2_right) {
+    } else if (system_state == pd_team2_left || system_state == pd_team2_right) {
         if (team2_score < 21) {
             team2_score++;
             // Clear old score
@@ -368,7 +399,7 @@ void setup()
 {
     // Initialize Serial
     Serial.begin(9600);
-    delay(500);
+    vTaskDelay(500 / portTICK_PERIOD_MS);
 
     BaseType_t status;
     
@@ -384,15 +415,45 @@ void setup()
     display.clearDisplay();
     displayInit();
 
-    // RTOS Task Setup
+    // ========== RTOS Task Setup ================
+
+    // Non-Timer Tasks
     global_event_group_handler = xEventGroupCreate();
 
-    status = xTaskCreate(button_listener_task, "Button Listener Task", 2048, (void*) global_event_group_handler, 3, NULL);
+    status = xTaskCreate(score_update_task, "Score Update Task", 2048, (void*) global_event_group_handler, 3, NULL);
     if (status != pdPASS)
     {
         Serial.println("Task Creation Failed!");
         while(1);
     }
+
+    // Timer Tasks
+    // TimerHandle_t hightlightTimer, dehighlightTimer;
+
+    // hightlightTimer = xTimerCreate("Highlight Court Timer", 
+    //                                 500, /* 500 Milliseconds */
+    //                                 pdTRUE, 
+    //                                 (void*) 0, 
+    //                                 highlight_court_task
+    //                                 );
+    // if (hightlightTimer == NULL) {
+    //     Serial.println("Timer Creation Failed!");
+    //     while(1);
+    // }
+    // // Start timer 2 after a 250 ms interval.
+    // vTaskDelay(250);
+    // dehighlightTimer = xTimerCreate("Dehighlight Court Timer", 
+    //                                 500, /* 500 Milliseconds */
+    //                                 pdTRUE, 
+    //                                 (void*) 1, 
+    //                                 highlight_court_task
+    //                                 );
+    // if (dehighlightTimer == NULL) {
+    //     Serial.println("Timer Creation Failed!");
+    //     while(1);
+    // }
+
+
     //vTaskStartScheduler();
     //REMOVED, The ESP-IDF handles this internally, ESP has it's own version of FreeRTOS that uses all the same functionality
     //  but operates slightly differently: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/freertos.html
@@ -401,12 +462,11 @@ void setup()
 
 void loop() 
 {
-    // Debug Mode Check
-    if (DEBUG_MODE){printDebug();}
+    // Check for Debug:
+    if (DEBUG_MODE) 
+    {
 
-    // Re-update display every half-second
-    // display.display();
+    } 
 
-    // delay(500);
 }
 
