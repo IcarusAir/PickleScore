@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
+#include "freertos/timers.h"
 
 #include <Adafruit_GFX.h>
 // Switch Comments to toggle emulator
@@ -171,7 +172,7 @@ void score_update_task(void* pvParameters)
             pdTRUE,
             pdFALSE,
             portMAX_DELAY);
-        
+
         if ((bits & BUTTON1_BIT) == BUTTON1_BIT) 
         {
             system_state = pd_team1_right;
@@ -192,10 +193,10 @@ void score_update_task(void* pvParameters)
 }
 
 void highlight_court_task(TimerHandle_t timer)
-{
+{   
     // Only blink the court light when waiting for service
-    if (system_state == pd_team1_left || system_state == pd_team1_right || system_state == pd_team2_left ||  system_state == pd_team2_left) 
-    {
+    if (system_state == pd_team1_left || system_state == pd_team1_right || system_state == pd_team2_left ||  system_state == pd_team2_right) 
+    {   
         if ( (int) pvTimerGetTimerID(timer) == 0) 
         {
             displayInvertCourtSelect();
@@ -427,31 +428,29 @@ void setup()
         while(1);
     }
 
-    // Timer Tasks
-    // TimerHandle_t hightlightTimer, dehighlightTimer;
+    // Timer Tasks (Handles might need to be global to stop/restart the timers)
+    TimerHandle_t hightlight_timer_handle = xTimerCreate("Highlight Court Timer", 
+        500 / portTICK_PERIOD_MS, 
+        pdTRUE, 
+        (void*) 0, 
+        highlight_court_task);
+    status = xTimerStart(hightlight_timer_handle, 0);
+    if (status != pdPASS) {
+        Serial.println("Timer Start Failed!");
+        while(1);
+    }
 
-    // hightlightTimer = xTimerCreate("Highlight Court Timer", 
-    //                                 500, /* 500 Milliseconds */
-    //                                 pdTRUE, 
-    //                                 (void*) 0, 
-    //                                 highlight_court_task
-    //                                 );
-    // if (hightlightTimer == NULL) {
-    //     Serial.println("Timer Creation Failed!");
-    //     while(1);
-    // }
-    // // Start timer 2 after a 250 ms interval.
-    // vTaskDelay(250);
-    // dehighlightTimer = xTimerCreate("Dehighlight Court Timer", 
-    //                                 500, /* 500 Milliseconds */
-    //                                 pdTRUE, 
-    //                                 (void*) 1, 
-    //                                 highlight_court_task
-    //                                 );
-    // if (dehighlightTimer == NULL) {
-    //     Serial.println("Timer Creation Failed!");
-    //     while(1);
-    // }
+    TimerHandle_t dehightlight_timer_handle = xTimerCreate("Dehighlight Court Timer", 
+        500 / portTICK_PERIOD_MS, 
+        pdTRUE, 
+        (void*) 1, 
+        highlight_court_task);
+    // Start timer 2 after a 250 ms interval.
+    status = xTimerStart(dehightlight_timer_handle, 250/portTICK_PERIOD_MS);
+    if (status != pdPASS) {
+        Serial.println("Timer Start Failed!");
+        while(1);
+    }
 
 
     //vTaskStartScheduler();
