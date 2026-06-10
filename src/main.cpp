@@ -5,7 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "freertos/timers.h"
 
 #include <Adafruit_GFX.h>
@@ -65,6 +65,7 @@ uint8_t court_data = 0x0;
 int team1_score = 0;
 int team2_score = 0;
 
+QueueHandle_t global_display_queue; // A queue makes more sense for a display (multiple display requests can happen)
 EventGroupHandle_t global_event_group_handler;
 
 // ============================= FUNCTION DEFINITIONS ====================================
@@ -157,6 +158,28 @@ void button_pin10_isr(void* arg)
 
 // =============================== RTOS Task Functions =============================================
 
+
+// Display Task
+// Interrupting the current display.display() will crash the emulator and cause graphical glitches in the screen
+// This is a higher priority task that ensures that a screen 
+void display_task(void* pvParameters)
+{
+    QueueHandle_t display_queue = (QueueHandle_t)pvParameters;
+    BaseType_t status;
+    int buff;
+
+    while(1)
+    {
+        // Receive from Queue
+        status = xQueueReceive(display_queue, &buff, portMAX_DELAY);
+        if (status != pdPASS)
+        {
+            Serial.println("Issue Receiving from Queue!");
+        }
+        display.display();
+    }
+
+}
 
 // The job of the score update task is to listen for a button to be pressed and update the score based on the logic of a classic
 // Pickleball game scoring system; This also involves updating the current server
@@ -254,13 +277,13 @@ void displayInit()
     display.write('0');
     display.write('0');
     
-
     display.display();
 
 }
 
 void displayInvertCourtSelect() 
 {
+    int buff = 0;
     if (system_state == pd_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_WHITE);
@@ -277,11 +300,13 @@ void displayInvertCourtSelect()
         return;
     }
 
-    display.display();
+    //display.display();
+    xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
 void displayInvertCourtDeselect() 
 {
+    int buff = 0;
     if (system_state == pd_team1_right) {
         display.fillRect(25, 20, 30, 16, SSD1306_INVERSE);
         display.drawRect(24, 19, 32, 18, SSD1306_BLACK);
@@ -331,7 +356,8 @@ void displayInvertCourtDeselect()
         return;
     }
 
-    display.display();
+    //display.display();
+    xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
 void incrementScore() 
@@ -339,6 +365,7 @@ void incrementScore()
     // Increase the score of the serving team
     char tens;
     char ones;
+    int buff = 0;
 
     if (system_state == pd_team1_left || system_state == pd_team1_right) {
         if (team1_score < 21) {
@@ -370,8 +397,8 @@ void incrementScore()
         return;
     }
 
-    display.display();
-    return;
+    //display.display();
+    xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
 void setScore(int s) 
@@ -403,7 +430,7 @@ void setup()
     vTaskDelay(500 / portTICK_PERIOD_MS);
 
     BaseType_t status;
-    
+
     gpioSetup();
     isrSetup();
 
@@ -419,9 +446,17 @@ void setup()
     // ========== RTOS Task Setup ================
 
     // Non-Timer Tasks
-    global_event_group_handler = xEventGroupCreate();
+    global_display_queue = xQueueCreate(1, sizeof(int));
+    status = xTaskCreate(display_task, "Display Task", 2048, (void*) global_display_queue, 3, NULL); 
+    /* Give the display task higher priority so that it can finish before being interrupted by another task */
+    if (status != pdPASS)
+    {
+        Serial.println("Task Creation Failed!");
+        while(1);
+    }
 
-    status = xTaskCreate(score_update_task, "Score Update Task", 2048, (void*) global_event_group_handler, 3, NULL);
+    global_event_group_handler = xEventGroupCreate();
+    status = xTaskCreate(score_update_task, "Score Update Task", 2048, (void*) global_event_group_handler, 2, NULL);
     if (status != pdPASS)
     {
         Serial.println("Task Creation Failed!");
@@ -445,7 +480,7 @@ void setup()
         pdTRUE, 
         (void*) 1, 
         highlight_court_task);
-    // Start timer 2 after a 250 ms interval.
+    /* Start timer 2 after a 250 ms interval. */
     status = xTimerStart(dehightlight_timer_handle, 250/portTICK_PERIOD_MS);
     if (status != pdPASS) {
         Serial.println("Timer Start Failed!");
