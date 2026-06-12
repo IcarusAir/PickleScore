@@ -220,6 +220,7 @@ void highlight_court_task(TimerHandle_t timer)
     // Only blink the court light when waiting for service
     if (system_state == pd_team1_left || system_state == pd_team1_right || system_state == pd_team2_left ||  system_state == pd_team2_right) 
     {   
+        // TODO Needs to catch when we are interrupting the cycle from deselect to select, causing graphics problems
         if ( (int) pvTimerGetTimerID(timer) == 0) 
         {
             displayInvertCourtSelect();
@@ -465,7 +466,7 @@ void setup()
 
     // Timer Tasks (Handles might need to be global to stop/restart the timers)
     TimerHandle_t hightlight_timer_handle = xTimerCreate("Highlight Court Timer", 
-        500 / portTICK_PERIOD_MS, 
+        3000 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 0, 
         highlight_court_task);
@@ -476,12 +477,13 @@ void setup()
     }
 
     TimerHandle_t dehightlight_timer_handle = xTimerCreate("Dehighlight Court Timer", 
-        500 / portTICK_PERIOD_MS, 
+        3000 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 1, 
         highlight_court_task);
     /* Start timer 2 after a 250 ms interval. */
-    status = xTimerStart(dehightlight_timer_handle, 250/portTICK_PERIOD_MS);
+    vTaskDelay(1500 / portTICK_PERIOD_MS);
+    status = xTimerStart(dehightlight_timer_handle, 0);
     if (status != pdPASS) {
         Serial.println("Timer Start Failed!");
         while(1);
