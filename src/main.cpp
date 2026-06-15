@@ -1,3 +1,17 @@
+/*
+ * DISTRACTED DEVELOPMENT
+ * PICKLESCORE (Working Product Name)
+ *
+ * This code is developed with the following libraries:
+ *  - Adafruit Graphics
+ *  - Adafruit SSD1306 Driver
+ *  - Arduino development library
+ *  - ESP-IDF development library
+ *  - FreeRTOS
+ * 
+ * Firmware for PickleScore device
+ */
+
 #include <Arduino.h>
 #include <stdio.h>
 #include <Wire.h>
@@ -39,43 +53,47 @@
 //Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 Adafruit_SSD1306_EMULATOR display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 
+typedef struct {
+    EventGroupHandle_t button_event_group;
+    QueueHandle_t score_queue;
+} button_task_params_t;
+
 enum state {
-    startup = 0,
+    startup,
     /* Pickleball Doubles*/
-    pd_team1_right = 1,
-    pd_team1_left = 2,
-    pd_team2_right = 3,
-    pd_team2_left = 4,
-    pd_between_games = 5,
-    pd_end_of_games = 6,
+    pd_team1_right,
+    pd_team1_left,
+    pd_team2_right,
+    pd_team2_left,
+    pd_between_games,
+    pd_end_of_games,
     /* Badminton Singles*/
-    bs_team1 = 7,
-    bs_team2 = 8,
-    bs_between_games = 9,
-    bs_end_of_games = 10
+    bs_team1,
+    bs_team2,
+    bs_between_games,
+    bs_end_of_games
 };
 
 enum state system_state = startup;
 
 // An 8-bit set of flags showing which courts are highlighted and current scoring flags
 // Bits 7:4 - court light data (LL - 7, UL - 6, UR - 5, LR - 4)
-// Bits 1:0 - Scoring flags (team 1 - 1, team 2 - 0)
+    // Add in current server (0-0-x, this is the x)
 uint8_t court_data = 0x0;
 
 uint8_t team1_score = 0;
 uint8_t team2_score = 0;
 
 QueueHandle_t global_display_queue; // A queue makes more sense for a display (multiple display requests can happen)
-EventGroupHandle_t global_event_group_handler;
 
 // ============================= FUNCTION DEFINITIONS ====================================
 void displayCourtInit();
 void displayInvertCourtSelect(uint8_t court);
 void displayInvertCourtDeselect(uint8_t court);
-void incrementScore();
+void incrementScore(uint8_t team);
+void setScore(uint8_t score, uint8_t value);
 void printDebug();
 void gpioSetup();
-void isrSetup();
 
 void button_pin0_isr(void* arg);
 void button_pin1_isr(void* arg);
@@ -106,28 +124,16 @@ void gpioSetup()
     gpio_set_intr_type(BUTTON3_PIN, GPIO_INTR_POSEDGE);
 }
 
-void isrSetup() 
-{
-    // Install ISR Service
-    if(gpio_install_isr_service(0 /* No Flags */) != ESP_OK){Serial.println("Issue Installing ISR Service");}
-
-    // Route ISRs
-    if(gpio_isr_handler_add(BUTTON1_PIN,button_pin0_isr,NULL) != ESP_OK){Serial.printf("Issue Linking ISR for pin 0");}
-    if(gpio_isr_handler_add(BUTTON2_PIN,button_pin1_isr,NULL) != ESP_OK){Serial.printf("Issue Linking ISR for pin 1");}
-    if(gpio_isr_handler_add(BUTTON3_PIN,button_pin10_isr,NULL) != ESP_OK){Serial.printf("Issue Linking ISR for pin 10");}
-
-}
-
-
 // =============================== Interrupt Service Routines ===========================
 
 // ISR for GPIO Pin 0 - connected to button that scores for team 1
 void button_pin0_isr(void* arg) 
 {
-    // TODO look into debouncing buttons with an RC filter or if there is an internal ISR option to do so.
+    EventGroupHandle_t event_group = (EventGroupHandle_t) arg;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
-    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON1_BIT, &xHigherPriorityTaskWoken);
+
+    result = xEventGroupSetBitsFromISR(event_group, BUTTON1_BIT, &xHigherPriorityTaskWoken);
     if (result != pdFAIL)
     {
         portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
@@ -136,9 +142,11 @@ void button_pin0_isr(void* arg)
 
 void button_pin1_isr(void* arg) 
 {
+    EventGroupHandle_t event_group = (EventGroupHandle_t) arg;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
-    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON2_BIT, &xHigherPriorityTaskWoken);
+
+    result = xEventGroupSetBitsFromISR(event_group, BUTTON2_BIT, &xHigherPriorityTaskWoken);
     if (result != pdFAIL)
     {
         portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
@@ -147,9 +155,11 @@ void button_pin1_isr(void* arg)
 
 void button_pin10_isr(void* arg) 
 {
+    EventGroupHandle_t event_group = (EventGroupHandle_t) arg;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
-    result = xEventGroupSetBitsFromISR(global_event_group_handler, BUTTON3_BIT, &xHigherPriorityTaskWoken);
+
+    result = xEventGroupSetBitsFromISR(event_group, BUTTON3_BIT, &xHigherPriorityTaskWoken);
     if (result != pdFAIL)
     {
         portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
@@ -162,7 +172,7 @@ void button_pin10_isr(void* arg)
 
 // Display Task
 // Interrupting the current display.display() will crash the emulator and cause graphical glitches in the screen
-// This is a higher priority task that ensures that a screen 
+// This is a higher priority task that ensures that a screen update doesn't interrupt another screen update
 void display_task(void* pvParameters)
 {
     QueueHandle_t display_queue = (QueueHandle_t)pvParameters;
@@ -182,16 +192,19 @@ void display_task(void* pvParameters)
 
 }
 
-// The job of the score update task is to listen for a button to be pressed and update the score based on the logic of a classic
-// Pickleball game scoring system; This also involves updating the current server
-void score_update_task(void* pvParameters) 
+// The job of the button handle task is to listen for a button to be pressed and handle the result of the press based on the system state
+void button_handle_task(void* pvParameters) 
 {
-    EventGroupHandle_t event_handler = (EventGroupHandle_t)pvParameters;
+    button_task_params_t *params = (button_task_params_t*) pvParameters;
+    EventGroupHandle_t button_event_group = params->button_event_group;
+    QueueHandle_t score_queue = params->score_queue;
     EventBits_t bits;
+
+    int buff = 0;
 
     while(1) 
     {
-        bits = xEventGroupWaitBits(event_handler,
+        bits = xEventGroupWaitBits(button_event_group,
             BUTTON1_BIT | BUTTON2_BIT | BUTTON3_BIT,
             pdTRUE,
             pdFALSE,
@@ -199,29 +212,108 @@ void score_update_task(void* pvParameters)
 
         if ((bits & BUTTON1_BIT) == BUTTON1_BIT) 
         {
-            system_state = pd_team1_right;
-            incrementScore();
+            switch (system_state) {
+                case startup: // On startup - Any button press starts the game
+                    system_state = pd_team1_right;
+                    break;
+
+                case pd_team1_right: // Increase team 1's score, they have posession, players switch places
+                    buff = 1;
+                    system_state = pd_team1_left;
+                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    break;
+                
+                case pd_team1_left: // Increase team 1's score, they have posession, players switch places
+                    buff = 1;
+                    system_state = pd_team1_right;
+                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    break;
+
+                case pd_team2_right: // Team 2 loses possession, no score change, service to team 1
+                    system_state = pd_team1_right;
+                    break;
+
+                case pd_team2_left: // Team 2 loses possession, no score change, service to team 1
+                    system_state = pd_team1_right;
+                    break;
+                
+                default:
+                    break;
+            }
         }
         if ((bits & BUTTON2_BIT) == BUTTON2_BIT) 
         {
-            system_state = pd_team2_right;
-            incrementScore();
+            switch (system_state) {
+                case startup: // On startup - Any button press starts the game
+                    system_state = pd_team1_right;
+                    break;
+
+                case pd_team1_right: // Team 1 loses possession, no score change, service to team 2
+                    system_state = pd_team2_right;
+                    break;
+                
+                case pd_team1_left: // Increase team 1's score, they have posession, players switch places
+                    system_state = pd_team2_right;
+                    break;
+
+                case pd_team2_right: // Increase team 2's score, they have posession, players switch places
+                    buff = 2;
+                    system_state = pd_team2_left;
+                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    break;
+
+                case pd_team2_left: // Increase team 2's score, they have posession, players switch places
+                    buff = 2;
+                    system_state = pd_team2_right;
+                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    break;
+                
+                default:
+                    break;
+            }
         }
         if ((bits & BUTTON3_BIT) == BUTTON3_BIT) 
         {
-            // Nothing yet
+            switch (system_state) {
+                case startup: // On startup - Any button press starts the game
+                    system_state = pd_team1_right;
+                    break;
+
+                default:
+                    break;
+            }
         }
         
     }
 
 }
 
+void update_score_task(void* pvParameters) {
+    QueueHandle_t score_queue = (QueueHandle_t)pvParameters;
+    BaseType_t status;
+    int buff;
+
+    while(1)
+    {
+        // Receive from Queue
+        status = xQueueReceive(score_queue, &buff, portMAX_DELAY);
+        if (status != pdPASS)
+        {
+            Serial.println("Issue Receiving from Queue!");
+        }
+
+        // Stuff to do
+        incrementScore(buff);
+    }
+}
+
+// The highlight court task is responsible for flashing an indicator on the display to indicate the current server.
 void highlight_court_task(TimerHandle_t timer)
 {   
     // Only blink the court light when waiting for service
     if (system_state == pd_team1_right || system_state == pd_team1_left || system_state == pd_team2_right || system_state == pd_team2_left) 
     {   
-        // TODO Needs to catch when we are interrupting the cycle from deselect to select, causing graphics problems
+
         if ( (int) pvTimerGetTimerID(timer) == 0) 
         {
             // Based on the court state, highlight the court
@@ -440,14 +532,14 @@ void displayInvertCourtDeselect(uint8_t court)
     xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
-void incrementScore() 
+void incrementScore(uint8_t team) 
 {
     // Increase the score of the serving team
     char tens;
     char ones;
     int buff = 0;
 
-    if (system_state == pd_team1_left || system_state == pd_team1_right) {
+    if (team == 1) {
         if (team1_score < 21) {
             team1_score++;
             // Clear old score
@@ -460,7 +552,7 @@ void incrementScore()
             display.write(tens);
             display.write(ones);
         }
-    } else if (system_state == pd_team2_left || system_state == pd_team2_right) {
+    } else if (team == 2) {
         if (team2_score < 21) {
             team2_score++;
             // Clear old score
@@ -482,7 +574,7 @@ void incrementScore()
 }
 
 // Still Incomplete
-void setScore(int s) 
+void setScore(uint8_t score, uint8_t value) 
 {
     // Set the score of the serving team to a certain number
 
@@ -513,7 +605,18 @@ void setup()
     BaseType_t status;
 
     gpioSetup();
-    isrSetup();
+
+    // Create Button task parameters (need to do so before we route ISRs)
+    button_task_params_t button_params = {xEventGroupCreate(), 
+                                          xQueueCreate(1, sizeof(int))};
+
+    // Install ISR Service
+    if(gpio_install_isr_service(0 /* No Flags */) != ESP_OK){Serial.println("Issue Installing ISR Service");}
+
+    // Route ISRs
+    if(gpio_isr_handler_add(BUTTON1_PIN,button_pin0_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 0");}
+    if(gpio_isr_handler_add(BUTTON2_PIN,button_pin1_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 1");}
+    if(gpio_isr_handler_add(BUTTON3_PIN,button_pin10_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 10");}
 
     // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
@@ -528,16 +631,26 @@ void setup()
 
     // Non-Timer Tasks
     global_display_queue = xQueueCreate(3, sizeof(int));
+    
+    // Schedule DISPLAY TASK
     status = xTaskCreate(display_task, "Display Task", 2048, (void*) global_display_queue, 3, NULL); 
-    /* Give the display task higher priority so that it can finish before being interrupted by another task */
+        /* Give the display task higher priority so that it can finish before being interrupted by another task */
     if (status != pdPASS)
     {
         Serial.println("Task Creation Failed!");
         while(1);
     }
 
-    global_event_group_handler = xEventGroupCreate();
-    status = xTaskCreate(score_update_task, "Score Update Task", 2048, (void*) global_event_group_handler, 2, NULL);
+    // Schedule BUTTON TASK
+    status = xTaskCreate(button_handle_task, "Button Handle Task", 2048, &button_params, 2, NULL);
+    if (status != pdPASS)
+    {
+        Serial.println("Task Creation Failed!");
+        while(1);
+    }
+
+    // Schedule SCORE TASK
+    status = xTaskCreate(update_score_task, "Score Update Task", 2048, (void*) button_params.score_queue, 2, NULL);
     if (status != pdPASS)
     {
         Serial.println("Task Creation Failed!");
