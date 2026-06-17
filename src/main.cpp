@@ -24,13 +24,15 @@
 
 #include <Adafruit_GFX.h>
 // Switch Comments to toggle emulator
-//#include <Adafruit_SSD1306.h>
-#include <Adafruit_SSD1306_EMULATOR.h>
+#include <Adafruit_SSD1306.h>
+//#include <Adafruit_SSD1306_EMULATOR.h>
 
 // Information on interrupts and GPIO: 
 // https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/api-reference/peripherals/gpio.html#_CPPv411gpio_configPK13gpio_config_t
 #include "driver/gpio.h"
+#include "driver/i2c.h"
 #include "esp_intr_alloc.h"
+
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -39,19 +41,24 @@
 
 #define BUTTON1_PIN GPIO_NUM_0
 #define BUTTON2_PIN GPIO_NUM_1
-#define BUTTON3_PIN GPIO_NUM_10
+
+#define SDA_PIN GPIO_NUM_3
+#define SCL_PIN GPIO_NUM_10
 
 #define BUTTON1_BIT (1 << 0)
 #define BUTTON2_BIT (1 << 1)
-#define BUTTON3_BIT (1 << 2)
+#define DEBOUNCE_DELAY 50 // in ms
 
 #define DEBUG_MODE false
 
 // ============================= GLOBAL DEFINITIONS ====================================
 
+// I2C Wire Definition
+
+
 // Adafruit Display variables - Switch Comments to toggle emulator
-//Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
-Adafruit_SSD1306_EMULATOR display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
+//Adafruit_SSD1306_EMULATOR display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 
 typedef struct {
     EventGroupHandle_t button_event_group;
@@ -79,12 +86,17 @@ enum state system_state = startup;
 // An 8-bit set of flags showing which courts are highlighted and current scoring flags
 // Bits 7:4 - court light data (LL - 7, UL - 6, UR - 5, LR - 4)
     // Add in current server (0-0-x, this is the x)
+// Bits 1:0 - winner flags (team 1 - 1, team 2 - 0)
 uint8_t court_data = 0x0;
 
 uint8_t team1_score = 0;
 uint8_t team2_score = 0;
 
 QueueHandle_t global_display_queue; // A queue makes more sense for a display (multiple display requests can happen)
+
+int button_state = LOW;
+int last_button_state = LOW;
+unsigned long last_debounce_time = 0;
 
 // ============================= FUNCTION DEFINITIONS ====================================
 void displayCourtInit();
@@ -97,7 +109,6 @@ void gpioSetup();
 
 void button_pin0_isr(void* arg);
 void button_pin1_isr(void* arg);
-void button_pin10_isr(void* arg);
 
 
 // =============================== SETUP Functions =====================================
@@ -117,11 +128,14 @@ void gpioSetup()
     gpio_pullup_dis(BUTTON2_PIN);
     gpio_set_intr_type(BUTTON2_PIN, GPIO_INTR_POSEDGE);
 
-    gpio_pad_select_gpio(BUTTON3_PIN);
-    gpio_set_direction(BUTTON3_PIN, GPIO_MODE_INPUT);
-    gpio_pulldown_en(BUTTON3_PIN);
-    gpio_pullup_dis(BUTTON3_PIN);
-    gpio_set_intr_type(BUTTON3_PIN, GPIO_INTR_POSEDGE);
+    // Initialize I2C Pins
+    gpio_pad_select_gpio(SDA_PIN);
+    gpio_pullup_en(SDA_PIN);
+    gpio_pulldown_dis(SDA_PIN);
+
+    gpio_pad_select_gpio(SCL_PIN);
+    gpio_pullup_en(SCL_PIN);
+    gpio_pulldown_dis(SCL_PIN);
 }
 
 // =============================== Interrupt Service Routines ===========================
@@ -133,10 +147,14 @@ void button_pin0_isr(void* arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
 
-    result = xEventGroupSetBitsFromISR(event_group, BUTTON1_BIT, &xHigherPriorityTaskWoken);
-    if (result != pdFAIL)
+    if (millis() - last_debounce_time > DEBOUNCE_DELAY)
     {
-        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+        last_debounce_time = millis();
+        result = xEventGroupSetBitsFromISR(event_group, BUTTON1_BIT, &xHigherPriorityTaskWoken);
+        if (result != pdFAIL)
+        {
+            portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+        }
     }
 }
 
@@ -146,25 +164,17 @@ void button_pin1_isr(void* arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
 
-    result = xEventGroupSetBitsFromISR(event_group, BUTTON2_BIT, &xHigherPriorityTaskWoken);
-    if (result != pdFAIL)
+    if (millis() - last_debounce_time > DEBOUNCE_DELAY)
     {
-        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+        last_debounce_time = millis();
+        result = xEventGroupSetBitsFromISR(event_group, BUTTON2_BIT, &xHigherPriorityTaskWoken);
+        if (result != pdFAIL)
+        {
+            portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+        }
     }
 }
 
-void button_pin10_isr(void* arg) 
-{
-    EventGroupHandle_t event_group = (EventGroupHandle_t) arg;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    BaseType_t result;
-
-    result = xEventGroupSetBitsFromISR(event_group, BUTTON3_BIT, &xHigherPriorityTaskWoken);
-    if (result != pdFAIL)
-    {
-        portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
-    }
-}
 
 
 // =============================== RTOS Task Functions =============================================
@@ -205,7 +215,7 @@ void button_handle_task(void* pvParameters)
     while(1) 
     {
         bits = xEventGroupWaitBits(button_event_group,
-            BUTTON1_BIT | BUTTON2_BIT | BUTTON3_BIT,
+            BUTTON1_BIT | BUTTON2_BIT,
             pdTRUE,
             pdFALSE,
             portMAX_DELAY);
@@ -271,19 +281,7 @@ void button_handle_task(void* pvParameters)
                 default:
                     break;
             }
-        }
-        if ((bits & BUTTON3_BIT) == BUTTON3_BIT) 
-        {
-            switch (system_state) {
-                case startup: // On startup - Any button press starts the game
-                    system_state = pd_team1_right;
-                    break;
-
-                default:
-                    break;
-            }
-        }
-        
+        }        
     }
 
 }
@@ -605,6 +603,7 @@ void setup()
     BaseType_t status;
 
     gpioSetup();
+    Wire.begin(SDA_PIN, SCL_PIN);
 
     // Create Button task parameters (need to do so before we route ISRs)
     button_task_params_t button_params = {xEventGroupCreate(), 
@@ -616,7 +615,6 @@ void setup()
     // Route ISRs
     if(gpio_isr_handler_add(BUTTON1_PIN,button_pin0_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 0");}
     if(gpio_isr_handler_add(BUTTON2_PIN,button_pin1_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 1");}
-    if(gpio_isr_handler_add(BUTTON3_PIN,button_pin10_isr,(void*) button_params.button_event_group) != ESP_OK){Serial.printf("Issue Linking ISR for pin 10");}
 
     // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
     if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
@@ -659,7 +657,7 @@ void setup()
 
     // Timer Tasks (Handles might need to be global to stop/restart the timers)
     TimerHandle_t hightlight_timer_handle = xTimerCreate("Highlight Court Timer", 
-        3000 / portTICK_PERIOD_MS, 
+        500 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 0, 
         highlight_court_task);
@@ -670,12 +668,12 @@ void setup()
     }
 
     TimerHandle_t dehightlight_timer_handle = xTimerCreate("Dehighlight Court Timer", 
-        3000 / portTICK_PERIOD_MS, 
+        500 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 1, 
         highlight_court_task);
     /* Start timer 2 after a 250 ms interval. */
-    vTaskDelay(1500 / portTICK_PERIOD_MS);
+    vTaskDelay(250 / portTICK_PERIOD_MS);
     status = xTimerStart(dehightlight_timer_handle, 0);
     if (status != pdPASS) {
         Serial.println("Timer Start Failed!");
