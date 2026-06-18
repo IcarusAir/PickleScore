@@ -33,6 +33,8 @@
 #include "driver/i2c.h"
 #include "esp_intr_alloc.h"
 
+#include "../include/devlogo.h"
+
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -47,14 +49,11 @@
 
 #define BUTTON1_BIT (1 << 0)
 #define BUTTON2_BIT (1 << 1)
-#define DEBOUNCE_DELAY 50 // in ms
+#define DEBOUNCE_DELAY 30 // in ms
 
 #define DEBUG_MODE false
 
 // ============================= GLOBAL DEFINITIONS ====================================
-
-// I2C Wire Definition
-
 
 // Adafruit Display variables - Switch Comments to toggle emulator
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
@@ -63,6 +62,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 typedef struct {
     EventGroupHandle_t button_event_group;
     QueueHandle_t score_queue;
+    TimerHandle_t boot_timer;
 } button_task_params_t;
 
 enum state {
@@ -82,6 +82,7 @@ enum state {
 };
 
 enum state system_state = startup;
+bool boot_flash_flag = false;
 
 // An 8-bit set of flags showing which courts are highlighted and current scoring flags
 // Bits 7:4 - court light data (LL - 7, UL - 6, UR - 5, LR - 4)
@@ -94,9 +95,14 @@ uint8_t team2_score = 0;
 
 QueueHandle_t global_display_queue; // A queue makes more sense for a display (multiple display requests can happen)
 
-int button_state = LOW;
-int last_button_state = LOW;
-unsigned long last_debounce_time = 0;
+// Debouncing Variables
+uint8_t button_1_state = 0;
+uint8_t last_button_1_state = 0;
+unsigned long last_debounce_time_b1 = 0;
+
+uint8_t button_2_state = 0;
+uint8_t last_button_2_state = 0;
+unsigned long last_debounce_time_b2 = 0;
 
 // ============================= FUNCTION DEFINITIONS ====================================
 void displayCourtInit();
@@ -120,13 +126,13 @@ void gpioSetup()
     gpio_set_direction(BUTTON1_PIN, GPIO_MODE_INPUT);
     gpio_pulldown_en(BUTTON1_PIN);
     gpio_pullup_dis(BUTTON1_PIN);
-    gpio_set_intr_type(BUTTON1_PIN, GPIO_INTR_POSEDGE);
+    gpio_set_intr_type(BUTTON1_PIN, GPIO_INTR_ANYEDGE);
 
     gpio_pad_select_gpio(BUTTON2_PIN);
     gpio_set_direction(BUTTON2_PIN, GPIO_MODE_INPUT);
     gpio_pulldown_en(BUTTON2_PIN);
     gpio_pullup_dis(BUTTON2_PIN);
-    gpio_set_intr_type(BUTTON2_PIN, GPIO_INTR_POSEDGE);
+    gpio_set_intr_type(BUTTON2_PIN, GPIO_INTR_ANYEDGE);
 
     // Initialize I2C Pins
     gpio_pad_select_gpio(SDA_PIN);
@@ -147,14 +153,26 @@ void button_pin0_isr(void* arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
 
-    if (millis() - last_debounce_time > DEBOUNCE_DELAY)
+    button_1_state = gpio_get_level(BUTTON1_PIN);
+    /* Encapsulate with debounce logic */
+    if (millis() - last_debounce_time_b1 > DEBOUNCE_DELAY)
     {
-        last_debounce_time = millis();
-        result = xEventGroupSetBitsFromISR(event_group, BUTTON1_BIT, &xHigherPriorityTaskWoken);
-        if (result != pdFAIL)
+        // Only pass if this is a meaningful change of state
+        if (button_1_state != last_button_1_state)
         {
-            portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+            last_button_1_state = button_1_state;
+            // Only pass on logic HIGH
+            if (button_1_state == 1)
+            {
+                // ISR Routine
+                result = xEventGroupSetBitsFromISR(event_group, BUTTON1_BIT, &xHigherPriorityTaskWoken);
+                if (result != pdFAIL)
+                {
+                    portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+                }
+            }
         }
+        last_debounce_time_b1 = millis();
     }
 }
 
@@ -164,14 +182,26 @@ void button_pin1_isr(void* arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     BaseType_t result;
 
-    if (millis() - last_debounce_time > DEBOUNCE_DELAY)
+    button_2_state = gpio_get_level(BUTTON2_PIN);
+    /* Encapsulate with debounce logic */
+    if (millis() - last_debounce_time_b2 > DEBOUNCE_DELAY)
     {
-        last_debounce_time = millis();
-        result = xEventGroupSetBitsFromISR(event_group, BUTTON2_BIT, &xHigherPriorityTaskWoken);
-        if (result != pdFAIL)
+        // Only pass if this is a meaningful change of state
+        if (button_2_state != last_button_2_state)
         {
-            portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+            last_button_2_state = button_2_state;
+            // Only pass on logic HIGH
+            if (button_2_state == 1)
+            {
+                // ISR Routine
+                result = xEventGroupSetBitsFromISR(event_group, BUTTON2_BIT, &xHigherPriorityTaskWoken);
+                if (result != pdFAIL)
+                {
+                    portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+                }
+            }
         }
+        last_debounce_time_b2 = millis();
     }
 }
 
@@ -179,6 +209,29 @@ void button_pin1_isr(void* arg)
 
 // =============================== RTOS Task Functions =============================================
 
+// Flash Boot Screen Task
+// Just a nice visual element to show that the device is waiting on the user, is a timer task
+// One boot starts, the Timer is stopped
+void flash_boot_screen_task(TimerHandle_t timer)
+{
+    // Another layer to ensure that this doesn't happen unless on startup
+    if (system_state == startup) {
+        if (boot_flash_flag) 
+        {
+            display.fillRect(18, 52, 100, 7, SSD1306_BLACK);
+            boot_flash_flag = false;
+        }
+        else
+        {
+            display.setCursor(18, 52);
+            display.setTextColor(SSD1306_WHITE);
+            display.print("PRESS A BUTTON..");
+            boot_flash_flag = true;
+        }
+        int buff = 0;
+        xQueueSendToBack(global_display_queue, &buff, 0);
+    }
+}
 
 // Display Task
 // Interrupting the current display.display() will crash the emulator and cause graphical glitches in the screen
@@ -208,6 +261,7 @@ void button_handle_task(void* pvParameters)
     button_task_params_t *params = (button_task_params_t*) pvParameters;
     EventGroupHandle_t button_event_group = params->button_event_group;
     QueueHandle_t score_queue = params->score_queue;
+    TimerHandle_t boot_timer = params->boot_timer;
     EventBits_t bits;
 
     int buff = 0;
@@ -225,6 +279,8 @@ void button_handle_task(void* pvParameters)
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
                     system_state = pd_team1_right;
+                    display.clearDisplay();
+                    displayCourtInit();
                     break;
 
                 case pd_team1_right: // Increase team 1's score, they have posession, players switch places
@@ -256,6 +312,8 @@ void button_handle_task(void* pvParameters)
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
                     system_state = pd_team1_right;
+                    display.clearDisplay();
+                    displayCourtInit();
                     break;
 
                 case pd_team1_right: // Team 1 loses possession, no score change, service to team 2
@@ -375,12 +433,19 @@ void end_game_task(void* pvParameters)
 
 // =============================== Helper Functions ================================================
 
-// TODO: Remove logic based on the system state, these should only use accepted parameters!
-
 
 // Show boot up screen
+void displayBootScreen()
+{
+    display.drawBitmap(18, 3, distracted_dev_logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+    display.setTextColor(SSD1306_WHITE);
+    display.display();
+}
+
+// Draw and display court
 void displayCourtInit() 
 {
+    int buff = 0;
     // Draw Court Diagram
     display.drawRect(25, 5, 30, 16, SSD1306_WHITE);
     display.drawRect(25, 20, 30, 16, SSD1306_WHITE);
@@ -389,13 +454,13 @@ void displayCourtInit()
     display.drawRect(73, 20, 30, 16, SSD1306_WHITE);
 
     // Highlights
-    display.drawLine(34,35,64,5,SSD1306_WHITE);
-    display.drawLine(36,35,66,5,SSD1306_WHITE);
-    display.drawLine(38,35,68,5,SSD1306_WHITE);
+    // display.drawLine(34,35,64,5,SSD1306_WHITE);
+    // display.drawLine(36,35,66,5,SSD1306_WHITE);
+    // display.drawLine(38,35,68,5,SSD1306_WHITE);
 
-    display.drawLine(86,35,102,19,SSD1306_WHITE);
-    display.drawLine(88,35,102,21,SSD1306_WHITE);
-    display.drawLine(90,35,102,23,SSD1306_WHITE);
+    // display.drawLine(86,35,102,19,SSD1306_WHITE);
+    // display.drawLine(88,35,102,21,SSD1306_WHITE);
+    // display.drawLine(90,35,102,23,SSD1306_WHITE);
 
     // Sets
     display.drawCircle(11,45,4,SSD1306_WHITE);
@@ -415,7 +480,8 @@ void displayCourtInit()
     display.write('0');
     display.write('0');
     
-    display.display();
+    //display.display();
+    xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 
 }
 
@@ -481,8 +547,8 @@ void displayInvertCourtDeselect(uint8_t court)
             display.drawPixel(25,19,SSD1306_WHITE);
             display.drawPixel(55,35,SSD1306_WHITE);
             display.drawPixel(54,19,SSD1306_WHITE);
-            display.drawPixel(50,19,SSD1306_WHITE);
-            display.drawPixel(52,19,SSD1306_WHITE);
+            // display.drawPixel(50,19,SSD1306_WHITE);
+            // display.drawPixel(52,19,SSD1306_WHITE);
             break;
 
         case 1: //pd_team1_left
@@ -493,12 +559,12 @@ void displayInvertCourtDeselect(uint8_t court)
             display.drawPixel(25,21,SSD1306_WHITE);
             display.drawPixel(55,5,SSD1306_WHITE);
             display.drawPixel(54,21,SSD1306_WHITE);
-            display.drawPixel(48,21,SSD1306_WHITE);
-            display.drawPixel(50,21,SSD1306_WHITE);
-            display.drawPixel(52,21,SSD1306_WHITE);
-            display.drawPixel(55,14,SSD1306_WHITE);
-            display.drawPixel(55,16,SSD1306_WHITE);
-            display.drawPixel(55,18,SSD1306_WHITE);
+            // display.drawPixel(48,21,SSD1306_WHITE);
+            // display.drawPixel(50,21,SSD1306_WHITE);
+            // display.drawPixel(52,21,SSD1306_WHITE);
+            // display.drawPixel(55,14,SSD1306_WHITE);
+            // display.drawPixel(55,16,SSD1306_WHITE);
+            // display.drawPixel(55,18,SSD1306_WHITE);
             break;
 
         case 2: //pd_team2_right
@@ -509,7 +575,7 @@ void displayInvertCourtDeselect(uint8_t court)
             display.drawPixel(73,21,SSD1306_WHITE);
             display.drawPixel(72,5,SSD1306_WHITE);
             display.drawPixel(102,21,SSD1306_WHITE);
-            display.drawPixel(100,21,SSD1306_WHITE);
+            // display.drawPixel(100,21,SSD1306_WHITE);
             break;
 
         case 3: //pd_team2_left
@@ -607,7 +673,13 @@ void setup()
 
     // Create Button task parameters (need to do so before we route ISRs)
     button_task_params_t button_params = {xEventGroupCreate(), 
-                                          xQueueCreate(1, sizeof(int))};
+                                          xQueueCreate(1, sizeof(int)),
+                                          xTimerCreate("Boot Screen Timer", 
+                                                        750 / portTICK_PERIOD_MS, 
+                                                        pdTRUE, 
+                                                        (void*) -1, 
+                                                        flash_boot_screen_task)
+                                         };
 
     // Install ISR Service
     if(gpio_install_isr_service(0 /* No Flags */) != ESP_OK){Serial.println("Issue Installing ISR Service");}
@@ -623,7 +695,7 @@ void setup()
     }
 
     display.clearDisplay();
-    displayCourtInit();
+    displayBootScreen();
 
     // ========== RTOS Task Setup ================
 
@@ -656,8 +728,16 @@ void setup()
     }
 
     // Timer Tasks (Handles might need to be global to stop/restart the timers)
+
+    // Start Boot Screen Timer
+    status = xTimerStart(button_params.boot_timer, 0);
+    if (status != pdPASS) {
+        Serial.println("Timer Start Failed!");
+        while(1);
+    }
+
     TimerHandle_t hightlight_timer_handle = xTimerCreate("Highlight Court Timer", 
-        500 / portTICK_PERIOD_MS, 
+        750 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 0, 
         highlight_court_task);
@@ -668,18 +748,17 @@ void setup()
     }
 
     TimerHandle_t dehightlight_timer_handle = xTimerCreate("Dehighlight Court Timer", 
-        500 / portTICK_PERIOD_MS, 
+        750 / portTICK_PERIOD_MS, 
         pdTRUE, 
         (void*) 1, 
         highlight_court_task);
     /* Start timer 2 after a 250 ms interval. */
-    vTaskDelay(250 / portTICK_PERIOD_MS);
+    vTaskDelay(375 / portTICK_PERIOD_MS);
     status = xTimerStart(dehightlight_timer_handle, 0);
     if (status != pdPASS) {
         Serial.println("Timer Start Failed!");
         while(1);
     }
-
 
     //vTaskStartScheduler();
     //REMOVED, The ESP-IDF handles this internally, ESP has it's own version of FreeRTOS that uses all the same functionality
