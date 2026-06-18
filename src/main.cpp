@@ -86,7 +86,8 @@ bool boot_flash_flag = false;
 
 // An 8-bit set of flags showing which courts are highlighted and current scoring flags
 // Bits 7:4 - court light data (LL - 7, UL - 6, UR - 5, LR - 4)
-    // Add in current server (0-0-x, this is the x)
+// Bit 3 - Team 1 server number - 0: server 1, 1: server 2
+// Bit 4 - Team 2 server number - 0: server 1, 1: server 2
 // Bits 1:0 - winner flags (team 1 - 1, team 2 - 0)
 uint8_t court_data = 0x0;
 
@@ -108,7 +109,9 @@ unsigned long last_debounce_time_b2 = 0;
 void displayCourtInit();
 void displayInvertCourtSelect(uint8_t court);
 void displayInvertCourtDeselect(uint8_t court);
-void incrementScore(uint8_t team);
+void displayIncrementScore(uint8_t team);
+void displayLosePossession();
+
 void setScore(uint8_t score, uint8_t value);
 void printDebug();
 void gpioSetup();
@@ -278,9 +281,13 @@ void button_handle_task(void* pvParameters)
         {
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
+                    buff = 0;
                     system_state = pd_team1_right;
                     display.clearDisplay();
                     displayCourtInit();
+                    xTimerStop(boot_timer, 0);
+                    court_data |= 0x08; // Set bit 3, server starts on 2
+                    xQueueSendToBack(score_queue, (void*) &buff, 0); // Update score with 0 flag
                     break;
 
                 case pd_team1_right: // Increase team 1's score, they have posession, players switch places
@@ -295,7 +302,8 @@ void button_handle_task(void* pvParameters)
                     xQueueSendToBack(score_queue, (void*) &buff, 0);
                     break;
 
-                case pd_team2_right: // Team 2 loses possession, no score change, service to team 1
+                case pd_team2_right: // Team 2 loses a serve, switch to other server or to other team
+
                     system_state = pd_team1_right;
                     break;
 
@@ -311,9 +319,13 @@ void button_handle_task(void* pvParameters)
         {
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
+                    buff = 0;
                     system_state = pd_team1_right;
                     display.clearDisplay();
                     displayCourtInit();
+                    xTimerStop(boot_timer, 0);
+                    court_data |= 0x08; // Set bit 3, server starts on 2
+                    xQueueSendToBack(score_queue, (void*) &buff, 0); // Update score with 0 flag
                     break;
 
                 case pd_team1_right: // Team 1 loses possession, no score change, service to team 2
@@ -358,8 +370,19 @@ void update_score_task(void* pvParameters) {
             Serial.println("Issue Receiving from Queue!");
         }
 
-        // Stuff to do
-        incrementScore(buff);
+        switch(buff) {
+            case 0:
+                displayLosePossession();
+                break;
+            case 1:
+                displayIncrementScore(1);
+                break;
+            case 2:
+                displayIncrementScore(2);
+                break;
+            default:
+                break;
+        }
     }
 }
 
@@ -432,7 +455,6 @@ void end_game_task(void* pvParameters)
 
 
 // =============================== Helper Functions ================================================
-
 
 // Show boot up screen
 void displayBootScreen()
@@ -596,7 +618,7 @@ void displayInvertCourtDeselect(uint8_t court)
     xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
-void incrementScore(uint8_t team) 
+void displayIncrementScore(uint8_t team) 
 {
     // Increase the score of the serving team
     char tens;
@@ -635,6 +657,11 @@ void incrementScore(uint8_t team)
 
     //display.display();
     xQueueSendToBack(global_display_queue, (void *) &buff, 0);
+}
+
+void displayLosePossession() 
+{
+
 }
 
 // Still Incomplete
