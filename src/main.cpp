@@ -61,7 +61,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RST);
 
 typedef struct {
     EventGroupHandle_t button_event_group;
-    QueueHandle_t score_queue;
     TimerHandle_t boot_timer;
 } button_task_params_t;
 
@@ -110,7 +109,7 @@ void displayCourtInit();
 void displayInvertCourtSelect(uint8_t court);
 void displayInvertCourtDeselect(uint8_t court);
 void displayIncrementScore(uint8_t team);
-void displayLosePossession();
+void displayLosePossession(uint8_t team);
 
 void setScore(uint8_t score, uint8_t value);
 void printDebug();
@@ -227,7 +226,6 @@ void flash_boot_screen_task(TimerHandle_t timer)
         else
         {
             display.setCursor(18, 52);
-            display.setTextColor(SSD1306_WHITE);
             display.print("PRESS A BUTTON..");
             boot_flash_flag = true;
         }
@@ -263,11 +261,8 @@ void button_handle_task(void* pvParameters)
 {
     button_task_params_t *params = (button_task_params_t*) pvParameters;
     EventGroupHandle_t button_event_group = params->button_event_group;
-    QueueHandle_t score_queue = params->score_queue;
     TimerHandle_t boot_timer = params->boot_timer;
     EventBits_t bits;
-
-    int buff = 0;
 
     while(1) 
     {
@@ -281,34 +276,46 @@ void button_handle_task(void* pvParameters)
         {
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
-                    buff = 0;
                     system_state = pd_team1_right;
                     display.clearDisplay();
                     displayCourtInit();
                     xTimerStop(boot_timer, 0);
+                    displayLosePossession(1);
                     court_data |= 0x08; // Set bit 3, server starts on 2
-                    xQueueSendToBack(score_queue, (void*) &buff, 0); // Update score with 0 flag
                     break;
 
                 case pd_team1_right: // Increase team 1's score, they have posession, players switch places
-                    buff = 1;
                     system_state = pd_team1_left;
-                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    displayIncrementScore(1);
                     break;
                 
                 case pd_team1_left: // Increase team 1's score, they have posession, players switch places
-                    buff = 1;
                     system_state = pd_team1_right;
-                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    displayIncrementScore(1);
                     break;
 
                 case pd_team2_right: // Team 2 loses a serve, switch to other server or to other team
-
-                    system_state = pd_team1_right;
+                    if ((court_data & 0x04) == 0x00) {
+                        displayLosePossession(2);
+                        court_data |= 0x04; // Set bit, team 2 is on server 2
+                        system_state = pd_team2_left;
+                    } else {
+                        displayLosePossession(2);
+                        court_data &= 0xFB; // clear bit, team 2 loses possession
+                        system_state = pd_team1_right;
+                    }
                     break;
 
-                case pd_team2_left: // Team 2 loses possession, no score change, service to team 1
-                    system_state = pd_team1_right;
+                case pd_team2_left:// Team 2 loses a serve, switch to other server or to other team
+                    if ((court_data & 0x04) == 0x00) {
+                        displayLosePossession(2);
+                        court_data |= 0x04; // Set bit, team 2 is on server 2
+                        system_state = pd_team2_right;
+                    } else {
+                        displayLosePossession(2);
+                        court_data &= 0xFB; // clear bit, team 2 loses possession
+                        system_state = pd_team1_right;
+                    }
                     break;
                 
                 default:
@@ -319,33 +326,46 @@ void button_handle_task(void* pvParameters)
         {
             switch (system_state) {
                 case startup: // On startup - Any button press starts the game
-                    buff = 0;
                     system_state = pd_team1_right;
                     display.clearDisplay();
                     displayCourtInit();
                     xTimerStop(boot_timer, 0);
+                    displayLosePossession(1);
                     court_data |= 0x08; // Set bit 3, server starts on 2
-                    xQueueSendToBack(score_queue, (void*) &buff, 0); // Update score with 0 flag
                     break;
 
-                case pd_team1_right: // Team 1 loses possession, no score change, service to team 2
-                    system_state = pd_team2_right;
+                case pd_team1_right: // Team 1 loses a serve, switch to other server or to other team
+                    if ((court_data & 0x08) == 0x00) {
+                        displayLosePossession(1);
+                        court_data |= 0x08; // Set bit, team 1 is on server 2
+                        system_state = pd_team1_left;
+                    } else {
+                        displayLosePossession(1);
+                        court_data &= 0xF7; // clear bit, team 1 loses possession
+                        system_state = pd_team2_right;
+                    }
                     break;
                 
-                case pd_team1_left: // Increase team 1's score, they have posession, players switch places
-                    system_state = pd_team2_right;
+                case pd_team1_left: // Team 1 loses a serve, switch to other server or to other team
+                    if ((court_data & 0x08) == 0x00) {
+                        displayLosePossession(1);
+                        court_data |= 0x08; // Set bit, team 1 is on server 2
+                        system_state = pd_team1_right;
+                    } else {
+                        displayLosePossession(1);
+                        court_data &= 0xF7; // clear bit, team 1 loses possession
+                        system_state = pd_team2_right;
+                    }
                     break;
 
                 case pd_team2_right: // Increase team 2's score, they have posession, players switch places
-                    buff = 2;
                     system_state = pd_team2_left;
-                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    displayIncrementScore(2);
                     break;
 
                 case pd_team2_left: // Increase team 2's score, they have posession, players switch places
-                    buff = 2;
                     system_state = pd_team2_right;
-                    xQueueSendToBack(score_queue, (void*) &buff, 0);
+                    displayIncrementScore(2);
                     break;
                 
                 default:
@@ -354,36 +374,6 @@ void button_handle_task(void* pvParameters)
         }        
     }
 
-}
-
-void update_score_task(void* pvParameters) {
-    QueueHandle_t score_queue = (QueueHandle_t)pvParameters;
-    BaseType_t status;
-    int buff;
-
-    while(1)
-    {
-        // Receive from Queue
-        status = xQueueReceive(score_queue, &buff, portMAX_DELAY);
-        if (status != pdPASS)
-        {
-            Serial.println("Issue Receiving from Queue!");
-        }
-
-        switch(buff) {
-            case 0:
-                displayLosePossession();
-                break;
-            case 1:
-                displayIncrementScore(1);
-                break;
-            case 2:
-                displayIncrementScore(2);
-                break;
-            default:
-                break;
-        }
-    }
 }
 
 // The highlight court task is responsible for flashing an indicator on the display to indicate the current server.
@@ -421,19 +411,19 @@ void highlight_court_task(TimerHandle_t timer)
             switch (court_data & 0xF0) { 
                 case 0x80: // LL court highlighted
                     displayInvertCourtDeselect(0);
-                    court_data = 0x00;
+                    court_data &= 0x7F; //Clear bit 7
                     break;
                 case 0x40: // UL court highlighed
                     displayInvertCourtDeselect(1);
-                    court_data = 0x00;
+                    court_data &= 0xBF; //Clear bit 6
                     break;
                 case 0x20: // UR court highlighed
                     displayInvertCourtDeselect(2);
-                    court_data = 0x00;
+                    court_data &= 0xDF; //Clear bit 5
                     break;
                 case 0x10: // LR court highlighed
                     displayInvertCourtDeselect(3);
-                    court_data = 0x00;
+                    court_data &= 0xEF; //Clear bit 4
                     break;
                 case 0x00: // Nothing is highlighted
                     return;
@@ -493,7 +483,6 @@ void displayCourtInit()
     // Score
     display.fillRect(59,48,9,3,SSD1306_WHITE);
     display.setCursor(29,43);
-    display.setTextColor(SSD1306_WHITE);
     display.setTextSize(2);
     display.write('0');
     display.write('0');
@@ -626,26 +615,28 @@ void displayIncrementScore(uint8_t team)
     int buff = 0;
 
     if (team == 1) {
-        if (team1_score < 21) {
+        if (team1_score < 11) {
             team1_score++;
             // Clear old score
             display.fillRect(29,43,29,16,SSD1306_BLACK);
 
             // Write new score
             display.setCursor(29,43);
+            display.setTextSize(2);
             tens = (char) team1_score/10 + 48;
             ones = (char) team1_score%10 + 48;
             display.write(tens);
             display.write(ones);
         }
     } else if (team == 2) {
-        if (team2_score < 21) {
+        if (team2_score < 11) {
             team2_score++;
             // Clear old score
             display.fillRect(77,43,29,16,SSD1306_BLACK);
 
             // Write new score
             display.setCursor(77,43);
+            display.setTextSize(2);
             tens = (char) team2_score/10 + 48;
             ones = (char) team2_score%10 + 48;
             display.write(tens);
@@ -659,9 +650,57 @@ void displayIncrementScore(uint8_t team)
     xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 }
 
-void displayLosePossession() 
+/* displayLosePossession
+ * Called when the currently receiving team scores, updates position of the 1 or 2.
+ * 
+ */
+void displayLosePossession(uint8_t team) 
 {
+    int buff = 0;
 
+    if (team == 1) {
+        // The current server is team 1, they just lost a point
+        if ((court_data & 0x08) == 0x00) {
+            // Only lost possession once, change from 1 to 2
+            // Clear old number
+            display.fillRect(9,16,5,7,SSD1306_BLACK);
+            // Draw new number
+            display.setCursor(9,16);
+            display.setTextSize(1);
+            display.write('2');
+        } else {
+            // Second possession lost, put 1 on other team side
+            // Clear old number
+            display.fillRect(9,16,5,7,SSD1306_BLACK);
+            // Draw new Number
+            display.setCursor(114,16);
+            display.setTextSize(1);
+            display.write('1');
+        }
+    } else if (team == 2) {
+        // The current server is team 2, they just lost a point
+        if ((court_data & 0x04) == 0x00) {
+            // Only lost possession once, change from 1 to 2
+            // Clear old number
+            display.fillRect(114,16,5,7,SSD1306_BLACK);
+            // Draw new number
+            display.setCursor(114,16);
+            display.setTextSize(1);
+            display.write('2');
+        } else {
+            // Second possession lost, put 1 on other team side
+            // Clear old number
+            display.fillRect(114,16,5,7,SSD1306_BLACK);
+            // Draw new Number
+            display.setCursor(9,16);
+            display.setTextSize(1);
+            display.write('1');
+        }
+    } else {
+        return;
+    }
+    //display.display();
+    xQueueSendToBack(global_display_queue, (void*) &buff, 0);
 }
 
 // Still Incomplete
@@ -700,7 +739,6 @@ void setup()
 
     // Create Button task parameters (need to do so before we route ISRs)
     button_task_params_t button_params = {xEventGroupCreate(), 
-                                          xQueueCreate(1, sizeof(int)),
                                           xTimerCreate("Boot Screen Timer", 
                                                         750 / portTICK_PERIOD_MS, 
                                                         pdTRUE, 
@@ -738,16 +776,8 @@ void setup()
         while(1);
     }
 
-    // Schedule BUTTON TASK
+    // Schedule BUTTON TASK - Main State handling task
     status = xTaskCreate(button_handle_task, "Button Handle Task", 2048, &button_params, 2, NULL);
-    if (status != pdPASS)
-    {
-        Serial.println("Task Creation Failed!");
-        while(1);
-    }
-
-    // Schedule SCORE TASK
-    status = xTaskCreate(update_score_task, "Score Update Task", 2048, (void*) button_params.score_queue, 2, NULL);
     if (status != pdPASS)
     {
         Serial.println("Task Creation Failed!");
