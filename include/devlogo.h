@@ -8,6 +8,7 @@
 #ifndef DEVLOGO_H
 
 #define DEVLOGO_H
+
 #include <Arduino.h>
 
 #define LOGO_WIDTH 96
