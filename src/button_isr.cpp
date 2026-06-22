@@ -45,7 +45,7 @@ void button_pin0_isr(void* arg)
         } 
         else if (last_button_1_state == 1)
         {
-            // Goes here when a button press ends on a 1, make current button state a 0
+            // Goes here when a button press ends on a HI, force previous state to LO for next input
             //Serial.println('X');
             last_button_1_state = 0;
         }
@@ -81,7 +81,7 @@ void button_pin1_isr(void* arg)
         }
         else if (last_button_2_state == 1)
         {
-            // Goes here when a button press ends on a HI, make current button state a LO
+            // Goes here when a button press ends on a HI, force previous state to LO for next input
             //Serial.println('X');
             last_button_2_state = 0;
         }
