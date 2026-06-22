@@ -29,7 +29,7 @@ void button_pin0_isr(void* arg)
     if (millis() - last_debounce_time_b1 > DEBOUNCE_DELAY)
     {
         // Only pass if this is a meaningful change of state
-        if (button_1_state != last_button_1_state)
+        if (button_1_state != last_button_1_state) // Eats inputs, but also prevents release checks
         {
             last_button_1_state = button_1_state;
             // Only pass on logic HIGH
@@ -42,9 +42,16 @@ void button_pin0_isr(void* arg)
                     portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
                 }
             }
+        } 
+        else if (last_button_1_state == 1)
+        {
+            // Goes here when a button press ends on a 1, make current button state a 0
+            //Serial.println('X');
+            last_button_1_state = 0;
         }
         last_debounce_time_b1 = millis();
     }
+
 }
 
 void button_pin1_isr(void* arg) 
@@ -71,6 +78,12 @@ void button_pin1_isr(void* arg)
                     portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
                 }
             }
+        }
+        else if (last_button_2_state == 1)
+        {
+            // Goes here when a button press ends on a HI, make current button state a LO
+            //Serial.println('X');
+            last_button_2_state = 0;
         }
         last_debounce_time_b2 = millis();
     }
