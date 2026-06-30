@@ -26,4 +26,6 @@ uint8_t court_data = 0x0;
 uint8_t team1_score = 0;
 uint8_t team2_score = 0;
 
+uint8_t winning_points = 11;
+
 QueueHandle_t global_display_queue; // A queue makes more sense for a display (multiple display requests can happen)

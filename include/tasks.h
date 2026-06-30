@@ -16,6 +16,5 @@
 
 void display_task(void* pvParameters);
 void button_handle_task(void* pvParameters);
-void end_game_task(void* pvParameters);
 
 #endif

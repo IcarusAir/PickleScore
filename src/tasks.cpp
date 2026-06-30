@@ -62,7 +62,7 @@ void button_handle_task(void* pvParameters)
                 case pd_team1_right: // Increase team 1's score, they have posession, players switch places
                     system_state = pd_team1_left;
                     displayIncrementScore(1);
-                    if (team1_score >= 11) { // Detect set win
+                    if (team1_score >= winning_points && abs(team1_score - team2_score) >= 2) { // Detect set win
                         if ((court_data & 0x02) == 0x02) { // Detect game win
                             system_state = pd_between_games;
                             displayEndGame(1);
@@ -78,7 +78,7 @@ void button_handle_task(void* pvParameters)
                 case pd_team1_left: // Increase team 1's score, they have posession, players switch places
                     system_state = pd_team1_right;
                     displayIncrementScore(1);
-                    if (team1_score >= 11) { // Detect set win
+                    if (team1_score >= winning_points && abs(team1_score - team2_score) >= 2) {// Detect set win
                         if ((court_data & 0x02) == 0x02) { // Detect game win
                             system_state = pd_between_games;
                             displayEndGame(1);
@@ -182,7 +182,7 @@ void button_handle_task(void* pvParameters)
                 case pd_team2_right: // Increase team 2's score, they have posession, players switch places
                     system_state = pd_team2_left;
                     displayIncrementScore(2);
-                    if (team2_score >= 11) { // Detect set win
+                    if (team2_score >= 11 && abs(team1_score - team2_score) >= 2) { // Detect set win
                         if ((court_data & 0x01) == 0x01) { // Detect game win
                             system_state = pd_between_games;
                             displayEndGame(2);
@@ -198,7 +198,7 @@ void button_handle_task(void* pvParameters)
                 case pd_team2_left: // Increase team 2's score, they have posession, players switch places
                     system_state = pd_team2_right;
                     displayIncrementScore(2);
-                    if (team2_score >= 11) { // Detect set win
+                    if (team2_score >= 11 && abs(team1_score - team2_score) >= 2) { // Detect set win
                         if ((court_data & 0x01) == 0x01) { // Detect game win
                             system_state = pd_between_games;
                             displayEndGame(2);
@@ -242,11 +242,3 @@ void button_handle_task(void* pvParameters)
     }
 
 }
-
-
-
-void end_game_task(void* pvParameters) 
-{
-
-}
-

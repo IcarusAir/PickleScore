@@ -72,6 +72,8 @@ extern uint8_t court_data;
 extern uint8_t team1_score;
 extern uint8_t team2_score;
 
+extern uint8_t winning_points;
+
 extern QueueHandle_t global_display_queue;
 
 #endif
