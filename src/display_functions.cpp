@@ -16,25 +16,22 @@ void displayBootScreen()
     display.display();
 }
 
-// Draw and display court
-void displayCourtInit() 
+// Draw and display court menu
+
+// clear - set whether or not the court redraw should clear all data
+void displayDrawCourt(bool clear) 
 {
     int buff = 0;
-    // Draw Court Diagram
-    display.drawRect(25, 5, 30, 16, SSD1306_WHITE);
-    display.drawRect(25, 20, 30, 16, SSD1306_WHITE);
-    display.drawRect(54, 5, 20, 31, SSD1306_WHITE);
-    display.drawRect(73, 5, 30, 16, SSD1306_WHITE);
-    display.drawRect(73, 20, 30, 16, SSD1306_WHITE);
+    
+    // If invoked between sets and games, clear the top bar
+    if (clear) {
+        display.fillRect(1,1,128,64,SSD1306_BLACK); // Clear entire screen
+    } else {
+        display.fillRect(1,1,128,36,SSD1306_BLACK); // Clear just the top half of the screen (don't clear set bubbles)
+    }   
+    xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 
-    // Highlights
-    // display.drawLine(34,35,64,5,SSD1306_WHITE);
-    // display.drawLine(36,35,66,5,SSD1306_WHITE);
-    // display.drawLine(38,35,68,5,SSD1306_WHITE);
-
-    // display.drawLine(86,35,102,19,SSD1306_WHITE);
-    // display.drawLine(88,35,102,21,SSD1306_WHITE);
-    // display.drawLine(90,35,102,23,SSD1306_WHITE);
+    displayCourtDontUpdate();
 
     // Sets
     display.drawCircle(11,45,4,SSD1306_WHITE);
@@ -43,6 +40,8 @@ void displayCourtInit()
     display.drawCircle(116,57,4,SSD1306_WHITE);
 
     // Score
+    display.fillRect(29,43,29,16,SSD1306_BLACK);
+    display.fillRect(77,43,29,16,SSD1306_BLACK);
     display.fillRect(59,48,9,3,SSD1306_WHITE);
     display.setCursor(29,43);
     display.setTextSize(2);
@@ -56,6 +55,15 @@ void displayCourtInit()
     //display.display();
     xQueueSendToBack(global_display_queue, (void *) &buff, 0);
 
+}
+
+void displayCourtDontUpdate() {
+    // Draw Court Diagram
+    display.drawRect(25, 5, 30, 16, SSD1306_WHITE);
+    display.drawRect(25, 20, 30, 16, SSD1306_WHITE);
+    display.drawRect(54, 5, 20, 31, SSD1306_WHITE);
+    display.drawRect(73, 5, 30, 16, SSD1306_WHITE);
+    display.drawRect(73, 20, 30, 16, SSD1306_WHITE);
 }
 
 /* displayInvertCourtSelect
@@ -220,7 +228,8 @@ void displayLosePossession(uint8_t team)
 {
     int buff = 0;
 
-    if (team == 1) {
+    if (team == 1) 
+    {
         // The current server is team 1, they just lost a point
         if ((court_data & 0x08) == 0x00) {
             // Only lost possession once, change from 1 to 2
@@ -239,7 +248,9 @@ void displayLosePossession(uint8_t team)
             display.setTextSize(1);
             display.write('1');
         }
-    } else if (team == 2) {
+    } 
+    else if (team == 2) 
+    {
         // The current server is team 2, they just lost a point
         if ((court_data & 0x04) == 0x00) {
             // Only lost possession once, change from 1 to 2
@@ -264,3 +275,72 @@ void displayLosePossession(uint8_t team)
     //display.display();
     xQueueSendToBack(global_display_queue, (void*) &buff, 0);
 }
+
+/* displayEndSet
+ * Called when the currently receiving team scores 11 (for pickleball), winning a set but not a game
+ * 
+ */
+void displayEndSet(uint8_t team)
+{
+    int buff = 0;
+
+    if (team == 1) {
+        // team 1 just won their first set
+        // Fill in Set Bubble
+        display.fillCircle(11,45,2,SSD1306_WHITE);
+
+        // Clear Court and display win message
+        display.fillRect(1,1,128,36,SSD1306_BLACK);
+        display.setCursor(11,3);
+        display.setTextSize(1);
+        display.print("Team 1 set win");
+    } 
+    else if (team == 2) {
+        // team 2 just won their first set
+        // Fill in Set Bubble
+        display.fillCircle(116,45,2,SSD1306_WHITE);
+
+        // Clear Court and display win message
+        display.fillRect(1,1,128,36,SSD1306_BLACK);
+        display.setCursor(11,3);
+        display.setTextSize(1);
+        display.print("Team 2 set win");
+    }
+
+    xQueueSendToBack(global_display_queue, (void*) &buff, 0);
+}
+
+/* displayEndGame
+ * Called when the currently receiving team wins a game, fill second set bubble and display
+ * 
+ */
+void displayEndGame(uint8_t team)
+{
+    int buff = 0;
+
+    if (team == 1) {
+        // team 1 just won their first set
+        // Fill in Set Bubble
+        display.fillCircle(11,57,2,SSD1306_WHITE);
+
+        // Clear Court and display win message
+        display.fillRect(1,1,128,36,SSD1306_BLACK);
+        display.setCursor(11,3);
+        display.setTextSize(1);
+        display.print("Team 1 game win");
+    } 
+    else if (team == 2) {
+        // team 2 just won their first set
+        // Fill in Set Bubble
+        display.fillCircle(116,57,2,SSD1306_WHITE);
+
+        // Clear Court and display win message
+        display.fillRect(1,1,128,36,SSD1306_BLACK);
+        display.setCursor(11,3);
+        display.setTextSize(1);
+        display.print("Team 2 game win");
+    }
+
+    xQueueSendToBack(global_display_queue, (void*) &buff, 0);
+}
+

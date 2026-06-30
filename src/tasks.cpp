@@ -53,7 +53,7 @@ void button_handle_task(void* pvParameters)
                 case startup: // On startup - Any button press starts the game
                     system_state = pd_team1_right;
                     display.clearDisplay();
-                    displayCourtInit();
+                    displayDrawCourt(true);
                     xTimerStop(boot_timer, 0);
                     displayLosePossession(1);
                     court_data |= 0x08; // Set bit 3, server starts on 2
@@ -62,11 +62,33 @@ void button_handle_task(void* pvParameters)
                 case pd_team1_right: // Increase team 1's score, they have posession, players switch places
                     system_state = pd_team1_left;
                     displayIncrementScore(1);
+                    if (team1_score >= 11) { // Detect set win
+                        if ((court_data & 0x02) == 0x02) { // Detect game win
+                            system_state = pd_between_games;
+                            displayEndGame(1);
+                            
+                        } else {
+                            system_state = pd_between_sets;
+                            court_data |= 0x02; // Set 'set' bit for team 1
+                            displayEndSet(1);
+                        }
+                    }
                     break;
                 
                 case pd_team1_left: // Increase team 1's score, they have posession, players switch places
                     system_state = pd_team1_right;
                     displayIncrementScore(1);
+                    if (team1_score >= 11) { // Detect set win
+                        if ((court_data & 0x02) == 0x02) { // Detect game win
+                            system_state = pd_between_games;
+                            displayEndGame(1);
+                            
+                        } else {
+                            system_state = pd_between_sets;
+                            court_data |= 0x02; // Set 'set' bit for team 1
+                            displayEndSet(1);
+                        }
+                    }
                     break;
 
                 case pd_team2_right: // Team 2 loses a serve, switch to other server or to other team
@@ -92,6 +114,30 @@ void button_handle_task(void* pvParameters)
                         system_state = pd_team1_right;
                     }
                     break;
+
+                case pd_between_sets:
+                    // Reset everything except set data for next set
+                    team1_score = 0;
+                    team2_score = 0;
+                    displayDrawCourt(false);
+                    system_state = pd_team1_right;
+                    court_data &= 0x03;
+                    // Make sure first serve starts on 2
+                    displayLosePossession(1);
+                    court_data |= 0x08; // Set bit 3, server starts on 2
+                    break;
+                
+                case pd_between_games:
+                    // Reset everything for next game
+                    team1_score = 0;
+                    team2_score = 0;
+                    displayDrawCourt(true);
+                    system_state = pd_team1_right;
+                    court_data = 0x00;
+                    // Make sure first serve starts on 2
+                    displayLosePossession(1);
+                    court_data |= 0x08;
+                    break;
                 
                 default:
                     break;
@@ -103,7 +149,7 @@ void button_handle_task(void* pvParameters)
                 case startup: // On startup - Any button press starts the game
                     system_state = pd_team1_right;
                     display.clearDisplay();
-                    displayCourtInit();
+                    displayDrawCourt(true);
                     xTimerStop(boot_timer, 0);
                     displayLosePossession(1);
                     court_data |= 0x08; // Set bit 3, server starts on 2
@@ -136,11 +182,57 @@ void button_handle_task(void* pvParameters)
                 case pd_team2_right: // Increase team 2's score, they have posession, players switch places
                     system_state = pd_team2_left;
                     displayIncrementScore(2);
+                    if (team2_score >= 11) { // Detect set win
+                        if ((court_data & 0x01) == 0x01) { // Detect game win
+                            system_state = pd_between_games;
+                            displayEndGame(2);
+                            
+                        } else {
+                            system_state = pd_between_sets;
+                            court_data |= 0x01; // Set 'set' bit for team 2
+                            displayEndSet(2);
+                        }
+                    }
                     break;
 
                 case pd_team2_left: // Increase team 2's score, they have posession, players switch places
                     system_state = pd_team2_right;
                     displayIncrementScore(2);
+                    if (team2_score >= 11) { // Detect set win
+                        if ((court_data & 0x01) == 0x01) { // Detect game win
+                            system_state = pd_between_games;
+                            displayEndGame(2);
+                            
+                        } else {
+                            system_state = pd_between_sets;
+                            court_data |= 0x01; // Set 'set' bit for team 2
+                            displayEndSet(2);
+                        }
+                    }
+                    break;
+
+                case pd_between_sets:
+                    // Reset everything for next game
+                    team1_score = 0;
+                    team2_score = 0;
+                    displayDrawCourt(false);
+                    system_state = pd_team1_right;
+                    court_data &= 0x03;
+                    // Make sure first serve starts on 2
+                    displayLosePossession(1);
+                    court_data |= 0x08; // Set bit 3, server starts on 2
+                    break;
+
+                case pd_between_games:
+                    // Reset everything for next game
+                    team1_score = 0;
+                    team2_score = 0;
+                    displayDrawCourt(true);
+                    system_state = pd_team1_right;
+                    court_data = 0x00;
+                    // Make sure first serve starts on 2
+                    displayLosePossession(1);
+                    court_data |= 0x08;
                     break;
                 
                 default:

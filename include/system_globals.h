@@ -54,8 +54,8 @@ enum state {
     pd_team1_left,
     pd_team2_right,
     pd_team2_left,
+    pd_between_sets,
     pd_between_games,
-    pd_end_of_games,
     /* Badminton Singles*/
     bs_team1,
     bs_team2,

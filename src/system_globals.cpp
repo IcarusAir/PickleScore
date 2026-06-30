@@ -18,8 +18,9 @@ bool boot_flash_flag = false;
 // An 8-bit set of flags showing which courts are highlighted and current scoring flags
 // Bits 7:4 - court light data (LL - 7, UL - 6, UR - 5, LR - 4)
 // Bit 3 - Team 1 server number - 0: server 1, 1: server 2
-// Bit 4 - Team 2 server number - 0: server 1, 1: server 2
-// Bits 1:0 - winner flags (team 1 - 1, team 2 - 0)
+// Bit 2 - Team 2 server number - 0: server 1, 1: server 2
+// Bit 1 - Team 1 set 1 taken flag
+// Bit 0 - Team 2 set 1 taken flag 
 uint8_t court_data = 0x0;
 
 uint8_t team1_score = 0;

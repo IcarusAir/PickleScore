@@ -15,11 +15,14 @@
 #include "devlogo.h"
 
 void displayBootScreen();
-void displayCourtInit();
+void displayDrawCourt(bool clear);
+void displayCourtDontUpdate();
 void displayInvertCourtSelect(uint8_t court);
 void displayInvertCourtDeselect(uint8_t court);
 void displayIncrementScore(uint8_t team);
 void displayLosePossession(uint8_t team);
+void displayEndSet(uint8_t team);
+void displayEndGame(uint8_t team);
 
 
 #endif

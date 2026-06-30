@@ -88,8 +88,6 @@ void highlight_court_task(TimerHandle_t timer)
                     Serial.println("Problem with two or more lights at once!"); 
                     break;
             }
-
         }
-        
-    }
+    }  
 }
